@@ -9,9 +9,11 @@ import org.footoo.airdropemergency.util.FileAccessUtil;
 import org.footoo.airdropemergency.util.ToastUtil;
 import org.footoo.airdropemergency.util.Utils;
 
-import com.slidingmenu.lib.SlidingMenu;
-
+import android.annotation.SuppressLint;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.os.Bundle;
@@ -20,6 +22,8 @@ import android.os.Message;
 import android.support.v4.app.Fragment;
 import android.util.Log;
 import android.view.KeyEvent;
+
+import com.slidingmenu.lib.SlidingMenu;
 
 public class MainActivity extends BaseActivity {
 
@@ -36,6 +40,8 @@ public class MainActivity extends BaseActivity {
 	private boolean wifiIsAvailable = false;
 
 	private Fragment mContent;
+
+	private WifiBroadcastReceiver mReceiver;
 
 	public MainActivity() {
 		super(R.string.app_name);
@@ -71,8 +77,15 @@ public class MainActivity extends BaseActivity {
 			ToastUtil.showShortToast(MainActivity.this,
 					getString(R.string.unknown_error));
 		}
+
+		IntentFilter filter = new IntentFilter();
+		filter.addAction("android.net.wifi.WIFI_STATE_CHANGED");
+		filter.addAction("android.net.wifi.STATE_CHANGE");
+		mReceiver = new WifiBroadcastReceiver();
+		registerReceiver(mReceiver, filter);
 	}
 
+	@SuppressLint("HandlerLeak")
 	private void initData() {
 		// var used for double click to exit
 		tExit = new Timer();
@@ -94,10 +107,12 @@ public class MainActivity extends BaseActivity {
 				// update the address in main fragment
 				if (mContent instanceof MainFragment) {
 					((MainFragment) mContent).setAddrTvText(getBrowserAddr());
+					((MainFragment) mContent)
+							.setPromptTvText(getBrowserPrompt());
 				}
 				// start the server
 				ServerRunner.startServer(ConstValue.PORT);
-				// TODO notifiction
+				// TODO notification
 			}
 		};
 
@@ -110,20 +125,20 @@ public class MainActivity extends BaseActivity {
 		wifiIsAvailable = Utils.isWifiConnected(wifiManager, wifiInfo);
 		if (wifiIsAvailable) {
 			// wifi is available, get the ip address in a new thread
-			new Thread(new Runnable() {
-
-				@Override
-				public void run() {
-					Bundle bundle = new Bundle();
-					bundle.putString("ip",
-							Utils.int2Ip(wifiInfo.getIpAddress()));
-					Message msg = new Message();
-					msg.setData(bundle);
-					handler.sendMessage(msg);
-				}
-			}).start();
+			new WifiAvailableThread().start();
 		}
 	}
+
+	public class WifiAvailableThread extends Thread {
+		@Override
+		public void run() {
+			Bundle bundle = new Bundle();
+			bundle.putString("ip", Utils.int2Ip(wifiInfo.getIpAddress()));
+			Message msg = new Message();
+			msg.setData(bundle);
+			handler.sendMessage(msg);
+		}
+	};
 
 	@Override
 	public void onSaveInstanceState(Bundle outState) {
@@ -156,6 +171,7 @@ public class MainActivity extends BaseActivity {
 	@Override
 	public void onDestroy() {
 		super.onDestroy();
+		unregisterReceiver(mReceiver);
 	}
 
 	/**
@@ -192,5 +208,37 @@ public class MainActivity extends BaseActivity {
 		int promptId = wifiIsAvailable ? R.string.input_on_browser
 				: R.string.wifi_not_avaliable;
 		return getString(promptId);
+	}
+
+	/**
+	 * response to wifi state changes
+	 * 
+	 * @author zouliping
+	 * 
+	 */
+	private class WifiBroadcastReceiver extends BroadcastReceiver {
+		@Override
+		public void onReceive(Context context, Intent intent) {
+			if (intent.getAction()
+					.equals(WifiManager.WIFI_STATE_CHANGED_ACTION)) {
+				int wifiState = intent.getIntExtra(
+						WifiManager.EXTRA_WIFI_STATE,
+						WifiManager.WIFI_STATE_DISABLED);
+				if (wifiState == WifiManager.WIFI_STATE_ENABLED) {
+					wifiIsAvailable = true;
+					new WifiAvailableThread().start();
+				} else if (wifiState == WifiManager.WIFI_STATE_DISABLED) {
+					wifiIsAvailable = false;
+					// refresh UI to show wifi is unavailable
+					if (mContent instanceof MainFragment) {
+						((MainFragment) mContent)
+								.setAddrTvText(getBrowserAddr());
+						((MainFragment) mContent)
+								.setPromptTvText(getBrowserPrompt());
+					}
+					ServerRunner.stopServer();
+				}
+			}
+		}
 	}
 }
